@@ -22,7 +22,7 @@ export async function downloadReportPdf(markdown: string): Promise<void> {
     <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>,
   );
 
-  const styledHtml = `
+  const bodyContent = `
     <div style="font-family: 'Helvetica Neue', Arial, sans-serif; color: #1a1a1a; padding: 16px; font-size: 13px; line-height: 1.7;">
       <style>
         h1 { font-size: 18px; font-weight: 700; margin-bottom: 12px; }
@@ -45,15 +45,24 @@ export async function downloadReportPdf(markdown: string): Promise<void> {
     </div>
   `;
 
-  const container = document.createElement("div");
-  container.innerHTML = styledHtml;
-  container.style.position = "absolute";
-  container.style.left = "-9999px";
-  container.style.width = "700px";
-  document.body.appendChild(container);
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("style", "position:absolute;left:-9999px;width:700px;height:0;border:0;");
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
+  if (!doc) {
+    document.body.removeChild(iframe);
+    throw new Error("Could not get iframe document");
+  }
+  doc.open();
+  doc.write(
+    `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#fff;color:#1a1a1a;">${bodyContent}</body></html>`
+  );
+  doc.close();
+  const container = doc.body;
 
   try {
-    const html2pdf = (await import("html2pdf.js")).default;
+    const html2pdfModule = await import("html2pdf.js");
+    const html2pdf = (html2pdfModule as any).default || (html2pdfModule as any);
     await html2pdf()
       .set({
         margin: [10, 10, 10, 10],
@@ -66,6 +75,6 @@ export async function downloadReportPdf(markdown: string): Promise<void> {
       .from(container)
       .save();
   } finally {
-    document.body.removeChild(container);
+    document.body.removeChild(iframe);
   }
 }

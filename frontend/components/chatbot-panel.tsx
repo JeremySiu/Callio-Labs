@@ -1,8 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import GlassSurface from "@/components/GlassSurface";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   IconSend,
   IconLoader2,
@@ -11,11 +25,27 @@ import {
   IconMessageCircle,
   IconCube3dSphere,
   IconTerminal,
+  IconChevronDown,
   IconChevronRight,
   IconDownload,
   IconFileTypePdf,
+  IconPaperclip,
 } from "@tabler/icons-react";
 import { isReportContent, downloadReportPdf } from "@/components/report-view";
+import { supabase } from "@/lib/supabase";
+
+const PROJECTS_BUCKET = "pdfs";
+
+function sanitizeUserPath(email: string): string {
+  return email.replace(/@/g, "_at_").replace(/\./g, "_");
+}
+
+const ML_MODELS = [
+  { id: "gpt-4.1", label: "GPT-4.1", image: "/openai.png" },
+  { id: "claude-3.5-sonnet", label: "Claude 3.5 Sonnet", image: "/claude (1).svg" },
+  { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash", image: "/gemini (1).png" },
+  { id: "deepseek-r1", label: "DeepSeek-R1", image: "/deepseek (1).png" },
+] as const;
 
 export interface AgentStep {
   type: "thinking" | "tool_call" | "tool_result" | "output";
@@ -30,6 +60,8 @@ export interface ChatMessage {
   steps?: AgentStep[];
 }
 
+type ProjectFileEntry = { name: string; path: string };
+
 interface ChatbotPanelProps {
   onSend?: () => void;
   messages: ChatMessage[];
@@ -38,6 +70,10 @@ interface ChatbotPanelProps {
   onToggleModelView?: () => void;
   modelViewActive?: boolean;
   modelViewContent?: React.ReactNode;
+  selectedModel?: string;
+  onModelChange?: (modelId: string) => void;
+  attachedProjectPaths?: string[];
+  onAttachedProjectChange?: (paths: string[]) => void;
 }
 
 const STEP_ICON: Record<AgentStep["type"], typeof IconBrain> = {
@@ -98,25 +134,27 @@ function ReportDownloadRow({ markdown }: { markdown: string }) {
   };
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3">
-      <IconFileTypePdf className="size-5 shrink-0 text-black/50" />
-      <div className="flex-1 min-w-0">
-        <p className="truncate text-sm font-medium text-black">{title}</p>
-        <p className="text-[11px] text-black/40">PDF report ready</p>
+    <div className="px-4 py-3">
+      <div className="flex items-center gap-3">
+        <IconFileTypePdf className="size-5 shrink-0 text-black/50" />
+        <div className="flex-1 min-w-0">
+          <p className="truncate text-sm font-medium text-black">{title}</p>
+          <p className="text-[11px] text-black/40">PDF report ready</p>
+        </div>
+        <button
+          type="button"
+          onClick={handleClick}
+          disabled={busy}
+          className="shrink-0 rounded p-1.5 text-black transition-opacity hover:opacity-70 disabled:opacity-50"
+          aria-label="Download PDF"
+        >
+          {busy ? (
+            <IconLoader2 className="size-5 animate-spin" />
+          ) : (
+            <IconDownload className="size-5" />
+          )}
+        </button>
       </div>
-      <button
-        type="button"
-        onClick={handleClick}
-        disabled={busy}
-        className="shrink-0 rounded p-1.5 text-black transition-opacity hover:opacity-70 disabled:opacity-50"
-        aria-label="Download PDF"
-      >
-        {busy ? (
-          <IconLoader2 className="size-5 animate-spin" />
-        ) : (
-          <IconDownload className="size-5" />
-        )}
-      </button>
     </div>
   );
 }
@@ -129,16 +167,100 @@ export function ChatbotPanel({
   onToggleModelView,
   modelViewActive = false,
   modelViewContent,
+  selectedModel: controlledModel,
+  onModelChange,
+  attachedProjectPaths: controlledAttached,
+  onAttachedProjectChange,
 }: ChatbotPanelProps) {
+  const { data: session } = useSession();
   const [input, setInput] = useState("");
   const [showModelViewButton, setShowModelViewButton] = useState(false);
+  const [internalModel, setInternalModel] = useState<string>(ML_MODELS[0].id);
+  const [internalAttached, setInternalAttached] = useState<string[]>([]);
+  const [projectFiles, setProjectFiles] = useState<ProjectFileEntry[]>([]);
+  const [projectFilesLoading, setProjectFilesLoading] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sequenceStartedRef = useRef(false);
+  const [outputFadedIn, setOutputFadedIn] = useState(false);
+
+  const userPath = session?.user?.email ? sanitizeUserPath(session.user.email) : null;
+  const attachedPaths = controlledAttached ?? internalAttached;
+  const setAttachedPaths = useCallback(
+    (paths: string[]) => {
+      if (onAttachedProjectChange) onAttachedProjectChange(paths);
+      else setInternalAttached(paths);
+    },
+    [onAttachedProjectChange],
+  );
+  const hasAttachments = attachedPaths.length > 0;
+
+  const selectedModel = controlledModel ?? internalModel;
+  const setSelectedModel = (id: string) => {
+    if (onModelChange) onModelChange(id);
+    else setInternalModel(id);
+  };
+  const currentModel = ML_MODELS.find((m) => m.id === selectedModel) ?? ML_MODELS[0];
+
+  const fetchProjectFiles = useCallback(async () => {
+    if (!userPath) return;
+    setProjectFilesLoading(true);
+    try {
+      const { data, error } = await supabase.storage
+        .from(PROJECTS_BUCKET)
+        .list(userPath, { limit: 100 });
+      if (error) throw error;
+      const entries: ProjectFileEntry[] = (data ?? [])
+        .filter((f) => f.name && !f.name.endsWith("/"))
+        .map((f) => ({
+          name: f.name,
+          path: `${userPath}/${f.name}`,
+        }));
+      setProjectFiles(entries);
+    } catch {
+      setProjectFiles([]);
+    } finally {
+      setProjectFilesLoading(false);
+    }
+  }, [userPath]);
+
+  const onPickerOpenChange = useCallback(
+    (open: boolean) => {
+      setPickerOpen(open);
+      if (open) fetchProjectFiles();
+    },
+    [fetchProjectFiles],
+  );
+
+  const toggleProjectPath = useCallback(
+    (path: string) => {
+      setAttachedPaths(
+        attachedPaths.includes(path)
+          ? attachedPaths.filter((p) => p !== path)
+          : [...attachedPaths, path],
+      );
+    },
+    [attachedPaths, setAttachedPaths],
+  );
+
+  const hasContent = messages.length > 0 || isLoading;
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, isLoading]);
+
+  useEffect(() => {
+    if (!hasContent || sequenceStartedRef.current) return;
+    sequenceStartedRef.current = true;
+    const t1 = setTimeout(() => setOutputFadedIn(true), 300);
+    const t2 = setTimeout(() => setShowModelViewButton(true), 300 + 6000);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [hasContent]);
 
   useEffect(() => {
     return () => {
@@ -153,11 +275,7 @@ export function ChatbotPanel({
     setInput("");
     onSend?.();
     onNewMessage(text);
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setShowModelViewButton(true), 3000);
   };
-
-  const hasContent = messages.length > 0 || isLoading;
 
   return (
     <aside
@@ -165,20 +283,27 @@ export function ChatbotPanel({
         showModelViewButton ? "gap-4" : "gap-1"
       }`}
     >
-      <GlassSurface
-        width={"100%" as unknown as number}
-        height={320}
-        borderRadius={16}
-        backgroundOpacity={0.55}
-        className="overflow-hidden"
-        contentClassName="!flex !flex-col !items-stretch !justify-start !p-0 !gap-0 !h-full"
+      <div
+        className={`overflow-hidden transition-all duration-300 ease-out ${
+          hasContent ? "max-h-[560px] opacity-100" : "max-h-0 opacity-0"
+        }`}
       >
+        <GlassSurface
+          width={"100%" as unknown as number}
+          height={560}
+          borderRadius={16}
+          backgroundOpacity={0.55}
+          className="overflow-hidden"
+          contentClassName="!flex !flex-col !items-stretch !justify-start !p-0 !gap-0 !h-full"
+        >
         {modelViewActive && modelViewContent ? (
           <div className="h-full w-full">{modelViewContent}</div>
         ) : (
           <div
             ref={scrollRef}
-            className="h-full overflow-y-auto"
+            className={`h-full overflow-y-auto transition-opacity duration-500 ease-out ${
+              outputFadedIn ? "opacity-100" : "opacity-0"
+            }`}
           >
             {!hasContent && (
               <div className="h-full flex items-center justify-center">
@@ -225,17 +350,26 @@ export function ChatbotPanel({
               </div>
             ))}
 
-            {isLoading && (
+            {(isLoading || (hasContent && !isLoading)) && (
               <div className="flex items-center gap-2 px-3 py-2 border-t border-black/6">
-                <IconLoader2 className="size-3 animate-spin text-violet-600" />
-                <span className="text-[11px] text-black/50">
-                  Agent is working…
-                </span>
+                {isLoading ? (
+                  <>
+                    <IconLoader2 className="size-3 animate-spin text-violet-600" />
+                    <span className="text-[11px] text-black/50">
+                      Agent is working…
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-[11px] text-black/50">
+                    Anything else I can do for you?
+                  </span>
+                )}
               </div>
             )}
           </div>
         )}
       </GlassSurface>
+      </div>
 
       {onToggleModelView && (
         <div
@@ -275,7 +409,100 @@ export function ChatbotPanel({
               aria-label="Message"
               disabled={isLoading}
             />
-            <div className="flex items-center justify-end gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Select
+                  value={selectedModel}
+                  onValueChange={setSelectedModel}
+                  disabled={isLoading}
+                >
+                  <SelectTrigger className="h-7 w-[132px] shrink-0 gap-1.5 border border-black/15 bg-white/80 px-2 shadow-none focus:ring-1 focus:ring-black/10 [&>svg:last-of-type]:hidden">
+                    <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                      <img
+                        src={currentModel.image}
+                        alt=""
+                        className="size-3.5 shrink-0 rounded object-contain"
+                      />
+                      <span className="truncate text-[11px] text-black/80">
+                        {currentModel.label}
+                      </span>
+                    </div>
+                    <IconChevronDown className="size-3 shrink-0 text-black/40" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ML_MODELS.map((m) => (
+                      <SelectItem
+                        key={m.id}
+                        value={m.id}
+                        className="flex items-center gap-2 text-[13px]"
+                      >
+                        <img
+                          src={m.image}
+                          alt=""
+                          className="size-3.5 shrink-0 rounded object-contain"
+                        />
+                        <span>{m.label}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <DropdownMenu open={pickerOpen} onOpenChange={onPickerOpenChange}>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className={`flex h-7 w-7 items-center justify-center rounded-md border text-black/60 transition-colors ${
+                        hasAttachments
+                          ? "border-emerald-500 bg-emerald-50"
+                          : "border-black/15 bg-white/80 hover:bg-black/5"
+                      }`}
+                      aria-label={hasAttachments ? "Attachments selected" : "Pick from project"}
+                    >
+                      <IconPaperclip
+                        className={`size-3.5 ${
+                          hasAttachments ? "text-emerald-600" : "text-black/55"
+                        }`}
+                      />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" side="top" className="min-w-[200px] max-h-[280px] overflow-y-auto">
+                    {!userPath ? (
+                      <DropdownMenuItem disabled onSelect={(e) => e.preventDefault()}>
+                        <span className="text-xs text-black/50">Sign in to use project files</span>
+                      </DropdownMenuItem>
+                    ) : projectFilesLoading ? (
+                      <DropdownMenuItem disabled onSelect={(e) => e.preventDefault()}>
+                        <span className="text-xs text-black/50">Loading…</span>
+                      </DropdownMenuItem>
+                    ) : projectFiles.length === 0 ? (
+                      <DropdownMenuItem disabled onSelect={(e) => e.preventDefault()}>
+                        <span className="text-xs text-black/50">No files in project</span>
+                      </DropdownMenuItem>
+                    ) : (
+                      <>
+                        {projectFiles.map((f) => (
+                          <DropdownMenuItem
+                            key={f.path}
+                            onSelect={(e) => {
+                              e.preventDefault();
+                              toggleProjectPath(f.path);
+                            }}
+                            className="flex items-center gap-2 cursor-pointer"
+                          >
+                            <Checkbox
+                              checked={attachedPaths.includes(f.path)}
+                              className="pointer-events-none"
+                            />
+                            <span className="truncate text-xs">{f.name}</span>
+                          </DropdownMenuItem>
+                        ))}
+                        <DropdownMenuItem onSelect={() => setPickerOpen(false)}>
+                          <span className="text-xs font-medium">Done</span>
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
               <Button
                 type="submit"
                 size="icon-sm"
