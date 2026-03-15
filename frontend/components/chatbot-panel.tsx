@@ -3,12 +3,28 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import GlassSurface from "@/components/GlassSurface";
-import { IconSend, IconLoader2 } from "@tabler/icons-react";
+import {
+  IconSend,
+  IconLoader2,
+  IconBrain,
+  IconTool,
+  IconMessageCircle,
+  IconCube3dSphere,
+  IconTerminal,
+  IconChevronRight,
+} from "@tabler/icons-react";
+
+export interface AgentStep {
+  type: "thinking" | "tool_call" | "tool_result" | "output";
+  label: string;
+  content: string;
+}
 
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  steps?: AgentStep[];
 }
 
 interface ChatbotPanelProps {
@@ -16,6 +32,52 @@ interface ChatbotPanelProps {
   messages: ChatMessage[];
   onNewMessage: (userText: string) => void;
   isLoading: boolean;
+  onToggleModelView?: () => void;
+  modelViewActive?: boolean;
+  modelViewContent?: React.ReactNode;
+}
+
+const STEP_ICON: Record<AgentStep["type"], typeof IconBrain> = {
+  thinking: IconBrain,
+  tool_call: IconTool,
+  tool_result: IconTerminal,
+  output: IconMessageCircle,
+};
+
+const STEP_COLOR: Record<AgentStep["type"], string> = {
+  thinking: "text-violet-600",
+  tool_call: "text-amber-600",
+  tool_result: "text-emerald-600",
+  output: "text-blue-600",
+};
+
+function StepRow({ step }: { step: AgentStep }) {
+  const [open, setOpen] = useState(false);
+  const Icon = STEP_ICON[step.type];
+  const color = STEP_COLOR[step.type];
+
+  return (
+    <div className="border-b border-black/4 last:border-b-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-black/3"
+      >
+        <IconChevronRight
+          className={`size-3 shrink-0 text-black/30 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+        />
+        <Icon className={`size-3 shrink-0 ${color}`} />
+        <span className="truncate text-[11px] text-black/60">{step.label}</span>
+      </button>
+      {open && (
+        <div className="px-3 pb-2 pl-8">
+          <p className="text-[11px] leading-relaxed text-black/50 whitespace-pre-wrap wrap-break-word">
+            {step.content}
+          </p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ChatbotPanel({
@@ -23,13 +85,17 @@ export function ChatbotPanel({
   messages,
   onNewMessage,
   isLoading,
+  onToggleModelView,
+  modelViewActive = false,
+  modelViewContent,
 }: ChatbotPanelProps) {
   const [input, setInput] = useState("");
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, isLoading]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,48 +106,89 @@ export function ChatbotPanel({
     onNewMessage(text);
   };
 
+  const hasContent = messages.length > 0 || isLoading;
+
   return (
-    <aside className="w-full max-w-2xl px-4 flex flex-col gap-3">
-      {messages.length > 0 && (
-        <GlassSurface
-          width={"100%" as unknown as number}
-          height={"fit-content" as unknown as number}
-          borderRadius={16}
-          className="overflow-hidden"
-          contentClassName="!flex !flex-col !items-stretch !justify-start !p-0 !gap-0"
-        >
-          <div className="max-h-96 overflow-y-auto px-4 py-3 space-y-3">
+    <aside className="w-full max-w-2xl px-4 flex flex-col gap-2">
+      <GlassSurface
+        width={"100%" as unknown as number}
+        height={320}
+        borderRadius={16}
+        backgroundOpacity={0.55}
+        className="overflow-hidden"
+        contentClassName="!flex !flex-col !items-stretch !justify-start !p-0 !gap-0 !h-full"
+      >
+        {modelViewActive && modelViewContent ? (
+          <div className="h-full w-full">{modelViewContent}</div>
+        ) : (
+          <div
+            ref={scrollRef}
+            className="h-full overflow-y-auto"
+          >
+            {!hasContent && (
+              <div className="h-full flex items-center justify-center">
+                <p className="text-sm text-black/30">
+                  Agent output will appear here…
+                </p>
+              </div>
+            )}
+
             {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`max-w-[85%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed ${
-                    msg.role === "user"
-                      ? "bg-black/10 text-black"
-                      : "bg-white/60 text-black border border-black/5"
-                  }`}
-                >
-                  <div className="whitespace-pre-wrap wrap-break-word">
-                    {msg.content}
+              <div key={msg.id}>
+                {msg.role === "user" ? (
+                  <div className="flex justify-end px-4 py-2">
+                    <div className="max-w-[85%] rounded-xl bg-black/10 px-3.5 py-2 text-sm text-black">
+                      {msg.content}
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div>
+                    {msg.steps && msg.steps.length > 0 && (
+                      <div className="border-y border-black/6">
+                        {msg.steps.map((step, i) => (
+                          <StepRow key={i} step={step} />
+                        ))}
+                      </div>
+                    )}
+
+                    {msg.content ? (
+                      <div className="px-4 py-3">
+                        <div className="text-sm leading-relaxed text-black whitespace-pre-wrap wrap-break-word">
+                          {msg.content}
+                          {isLoading && msg.id === messages[messages.length - 1]?.id && (
+                            <span className="inline-block w-1.5 h-4 ml-0.5 bg-black/40 animate-pulse rounded-sm align-text-bottom" />
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               </div>
             ))}
 
             {isLoading && (
-              <div className="flex justify-start">
-                <div className="flex items-center gap-2 rounded-xl bg-white/60 px-3.5 py-2.5 text-sm text-black/60 border border-black/5">
-                  <IconLoader2 className="size-4 animate-spin" />
-                  <span>Analyzing…</span>
-                </div>
+              <div className="flex items-center gap-2 px-3 py-2 border-t border-black/6">
+                <IconLoader2 className="size-3 animate-spin text-violet-600" />
+                <span className="text-[11px] text-black/50">
+                  Agent is working…
+                </span>
               </div>
             )}
-
-            <div ref={messagesEndRef} />
           </div>
-        </GlassSurface>
+        )}
+      </GlassSurface>
+
+      {onToggleModelView && (
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={onToggleModelView}
+            className="flex items-center gap-1.5 rounded-full bg-black/5 px-3 py-1.5 text-xs font-medium text-black/60 transition-colors hover:bg-black/10 hover:text-black/80"
+          >
+            <IconCube3dSphere className="size-3.5" />
+            {modelViewActive ? "Show agent output" : "Show model view"}
+          </button>
+        </div>
       )}
 
       <form onSubmit={handleSubmit} className="w-full">
@@ -89,6 +196,7 @@ export function ChatbotPanel({
           width={"100%" as unknown as number}
           height={"fit-content" as unknown as number}
           borderRadius={16}
+          backgroundOpacity={0.55}
           className="overflow-hidden"
           contentClassName="!flex !flex-col !items-stretch !justify-center !p-0 !gap-0"
         >

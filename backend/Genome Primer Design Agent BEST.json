@@ -16416,9 +16416,9 @@
   },
   "description": "Harness the Power of Conversational AI.",
   "endpoint_name": null,
-  "id": "26233de8-e4d6-427a-a2be-938d9990a93d",
+  "id": "9d638972-17ba-45e2-8d7b-a688d87c0f11",
   "is_component": false,
-  "last_tested_version": "1.7.1",
-  "name": "Genome Primer Design Agent V2",
+  "last_tested_version": "1.7.2",
+  "name": "Genome Primer Design Agent BEST",
   "tags": []
 }

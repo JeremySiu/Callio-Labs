@@ -3,7 +3,11 @@
 import { useCallback, useState } from "react";
 import dynamic from "next/dynamic";
 import { AppSidebar } from "@/components/app-sidebar";
-import { ChatbotPanel, type ChatMessage } from "@/components/chatbot-panel";
+import {
+  ChatbotPanel,
+  type ChatMessage,
+  type AgentStep,
+} from "@/components/chatbot-panel";
 import { ProjectsPanel } from "@/components/projects-panel";
 import { CallioLabsSplash } from "@/components/callio-labs-splash";
 import GlassSurface from "@/components/GlassSurface";
@@ -14,6 +18,13 @@ const PdbViewerOverlay = dynamic(
   () =>
     import("@/components/pdb-viewer-overlay").then((m) => ({
       default: m.PdbViewerOverlay,
+    })),
+  { ssr: false },
+);
+const EmbeddedModelViewer = dynamic(
+  () =>
+    import("@/components/embedded-model-viewer").then((m) => ({
+      default: m.EmbeddedModelViewer,
     })),
   { ssr: false },
 );
@@ -28,6 +39,7 @@ export function DashboardContent() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [modelViewActive, setModelViewActive] = useState(false);
 
   const handleNewMessage = useCallback(
     async (userText: string) => {
@@ -36,7 +48,12 @@ export function DashboardContent() {
         role: "user",
         content: userText,
       };
-      setMessages((prev) => [...prev, userMsg]);
+      const assistantId = crypto.randomUUID();
+      setMessages((prev) => [
+        ...prev,
+        userMsg,
+        { id: assistantId, role: "assistant", content: "" },
+      ]);
       setIsLoading(true);
 
       try {
@@ -49,41 +66,145 @@ export function DashboardContent() {
           }),
         });
 
-        const data = await res.json();
+        const contentType = res.headers.get("content-type") ?? "";
 
         if (!res.ok) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: `Error: ${data.error ?? "Something went wrong"}`,
-            },
-          ]);
+          const rawText = await res.text();
+          let errorMsg = "Something went wrong";
+          try {
+            const errData = JSON.parse(rawText);
+            errorMsg = errData.error ?? errorMsg;
+          } catch {
+            errorMsg = rawText || errorMsg;
+          }
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: `Error: ${errorMsg}` }
+                : m,
+            ),
+          );
           return;
         }
 
-        if (data.session_id) {
-          setSessionId(data.session_id);
+        if (
+          contentType.includes("application/json") &&
+          !contentType.includes("text/plain")
+        ) {
+          const data = await res.json();
+          if (data.session_id) setSessionId(data.session_id);
+          const steps: AgentStep[] = Array.isArray(data.steps)
+            ? data.steps
+            : [];
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    content: data.message ?? "No response received.",
+                    steps,
+                  }
+                : m,
+            ),
+          );
+          return;
         }
 
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: data.message ?? "No response received.",
-          },
-        ]);
+        if (!res.body) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: "No response body received." }
+                : m,
+            ),
+          );
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        const processLine = (line: string) => {
+          const trimmed = line.trim();
+          if (!trimmed) return;
+
+          try {
+            const event = JSON.parse(trimmed);
+
+            if (event.type === "step" && event.step) {
+              const step = event.step as AgentStep;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, steps: [...(m.steps ?? []), step] }
+                    : m,
+                ),
+              );
+            } else if (event.type === "token" && event.chunk) {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: m.content + event.chunk }
+                    : m,
+                ),
+              );
+            } else if (event.type === "end") {
+              if (event.session_id) setSessionId(event.session_id);
+              const steps: AgentStep[] = Array.isArray(event.steps)
+                ? event.steps
+                : [];
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? {
+                        ...m,
+                        content:
+                          event.message || m.content || "No response received.",
+                        steps: steps.length > 0 ? steps : m.steps ?? [],
+                      }
+                    : m,
+                ),
+              );
+            } else if (event.type === "error") {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: `Error: ${event.error}` }
+                    : m,
+                ),
+              );
+            }
+          } catch {
+            // skip unparseable lines
+          }
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            processLine(line);
+          }
+        }
+
+        if (buffer.trim()) processLine(buffer);
       } catch (err) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: `Error: ${err instanceof Error ? err.message : "Network error"}`,
-          },
-        ]);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? {
+                  ...m,
+                  content: `Error: ${err instanceof Error ? err.message : "Network error"}`,
+                }
+              : m,
+          ),
+        );
       } finally {
         setIsLoading(false);
       }
@@ -193,22 +314,14 @@ export function DashboardContent() {
                     open={viewerOpen}
                     onClose={() => setViewerOpen(false)}
                   />
-                  <aside className="w-full max-w-2xl px-4">
-                    <GlassSurface
-                      width={"100%" as unknown as number}
-                      height={"fit-content" as unknown as number}
-                      borderRadius={16}
-                      className="overflow-hidden"
-                      contentClassName="!flex !flex-col !items-stretch !justify-center !p-0 !gap-0"
-                    >
-                      <div className="h-24" />
-                    </GlassSurface>
-                  </aside>
                   <ChatbotPanel
                     onSend={() => setHasStarted(true)}
                     messages={messages}
                     onNewMessage={handleNewMessage}
                     isLoading={isLoading}
+                    onToggleModelView={() => setModelViewActive((v) => !v)}
+                    modelViewActive={modelViewActive}
+                    modelViewContent={<EmbeddedModelViewer />}
                   />
                   <div
                     className="transition-[flex-grow] duration-[1400ms] ease-in-out"

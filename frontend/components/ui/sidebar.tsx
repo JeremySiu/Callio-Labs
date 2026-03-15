@@ -242,8 +242,8 @@ function Sidebar({
         <GlassSurface
           data-sidebar="sidebar"
           data-slot="sidebar-inner"
-          width="100%"
-          height="100%"
+          width={"100%" as unknown as number}
+          height={"100%" as unknown as number}
           borderRadius={12}
           className={cn(
             "flex flex-col size-full text-black group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:shadow-sm group-data-[variant=floating]:ring-1 group-data-[variant=floating]:ring-sidebar-border"

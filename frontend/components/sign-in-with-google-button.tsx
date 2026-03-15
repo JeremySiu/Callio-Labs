@@ -29,8 +29,8 @@ function GoogleIcon({ className }: { className?: string }) {
 export function SignInWithGoogleButton() {
   return (
     <GlassSurface
-      width="fit-content"
-      height="fit-content"
+      width={"fit-content" as unknown as number}
+      height={"fit-content" as unknown as number}
       borderRadius={20}
       className="mt-5 md:mt-6"
       contentClassName="p-0 !items-center !justify-center"

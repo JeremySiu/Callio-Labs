@@ -107,7 +107,7 @@ export function PdbViewerOverlay({ open, onClose }: PdbViewerOverlayProps) {
       style={{ opacity: fadeIn ? 1 : 0 }}
     >
       <GlassSurface
-        width="100%"
+        width={"100%" as unknown as number}
         height={VIEWER_HEIGHT}
         borderRadius={16}
         brightness={70}
