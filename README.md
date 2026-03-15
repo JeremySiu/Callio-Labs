@@ -1,4 +1,4 @@
-# GenaiGenesis2026 — Agentic Genome Research Platform
+# Callio_Labs — Agentic Genome Research Platform
 
 An AI-powered genomics research platform by **Callio Labs** that combines a multi-persona mutation research chatbot, DNA primer design, NCBI dataset integration, protein structure prediction, and a visual LangFlow agent — all behind a modern Next.js dashboard with 3D DNA visualization.
 
