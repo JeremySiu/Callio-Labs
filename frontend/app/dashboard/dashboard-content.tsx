@@ -1,18 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { AppSidebar } from "@/components/app-sidebar";
 import {
   ChatbotPanel,
   type ChatMessage,
-  type AgentStep,
 } from "@/components/chatbot-panel";
 import { ProjectsPanel } from "@/components/projects-panel";
 import { CallioLabsSplash } from "@/components/callio-labs-splash";
 import GlassSurface from "@/components/GlassSurface";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { DEMO_STEPS } from "@/lib/demo-sequence";
 const Dither = dynamic(() => import("@/components/Dither"), { ssr: false });
 const PdbViewerOverlay = dynamic(
   () =>
@@ -38,8 +38,14 @@ export function DashboardContent() {
   const [activePage, setActivePage] = useState<Page>("study");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [modelViewActive, setModelViewActive] = useState(false);
+  const demoTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  useEffect(() => {
+    return () => {
+      demoTimers.current.forEach(clearTimeout);
+    };
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -53,7 +59,11 @@ export function DashboardContent() {
   }, []);
 
   const handleNewMessage = useCallback(
-    async (userText: string) => {
+    (userText: string) => {
+      // Clear any running demo timers from a previous run
+      demoTimers.current.forEach(clearTimeout);
+      demoTimers.current = [];
+
       const userMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "user",
@@ -67,160 +77,38 @@ export function DashboardContent() {
       ]);
       setIsLoading(true);
 
-      try {
-        const res = await fetch("/api/langflow/run", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            input_value: userText,
-            ...(sessionId ? { session_id: sessionId } : {}),
-          }),
-        });
-
-        const contentType = res.headers.get("content-type") ?? "";
-
-        if (!res.ok) {
-          const rawText = await res.text();
-          let errorMsg = "Something went wrong";
-          try {
-            const errData = JSON.parse(rawText);
-            errorMsg = errData.error ?? errorMsg;
-          } catch {
-            errorMsg = rawText || errorMsg;
+      // Run the scripted demo sequence with timed delays
+      let cumulativeDelay = 0;
+      DEMO_STEPS.forEach((evt, idx) => {
+        cumulativeDelay += evt.delay;
+        const timer = setTimeout(() => {
+          // Add step if present
+          if (evt.step) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, steps: [...(m.steps ?? []), evt.step!] }
+                  : m,
+              ),
+            );
           }
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, content: `Error: ${errorMsg}` }
-                : m,
-            ),
-          );
-          return;
-        }
-
-        if (
-          contentType.includes("application/json") &&
-          !contentType.includes("text/plain")
-        ) {
-          const data = await res.json();
-          if (data.session_id) setSessionId(data.session_id);
-          const steps: AgentStep[] = Array.isArray(data.steps)
-            ? data.steps
-            : [];
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? {
-                    ...m,
-                    content: data.message ?? "No response received.",
-                    steps,
-                  }
-                : m,
-            ),
-          );
-          return;
-        }
-
-        if (!res.body) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, content: "No response body received." }
-                : m,
-            ),
-          );
-          return;
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        const processLine = (line: string) => {
-          const trimmed = line.trim();
-          if (!trimmed) return;
-
-          try {
-            const event = JSON.parse(trimmed);
-
-            if (event.type === "step" && event.step) {
-              const step = event.step as AgentStep;
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId
-                    ? { ...m, steps: [...(m.steps ?? []), step] }
-                    : m,
-                ),
-              );
-            } else if (event.type === "token" && event.chunk) {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId
-                    ? { ...m, content: m.content + event.chunk }
-                    : m,
-                ),
-              );
-            } else if (event.type === "end") {
-              if (event.session_id) setSessionId(event.session_id);
-              const steps: AgentStep[] = Array.isArray(event.steps)
-                ? event.steps
-                : [];
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId
-                    ? {
-                        ...m,
-                        content:
-                          event.message || m.content || "No response received.",
-                        steps: steps.length > 0 ? steps : (m.steps ?? []),
-                      }
-                    : m,
-                ),
-              );
-            } else if (event.type === "error") {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId
-                    ? { ...m, content: `Error: ${event.error}` }
-                    : m,
-                ),
-              );
-            }
-          } catch {
-            // skip unparseable lines
+          // Set content if present
+          if (evt.content) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId ? { ...m, content: evt.content! } : m,
+              ),
+            );
           }
-        };
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            processLine(line);
+          // Last step → stop loading
+          if (idx === DEMO_STEPS.length - 1) {
+            setIsLoading(false);
           }
-        }
-
-        if (buffer.trim()) processLine(buffer);
-      } catch (err) {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId
-              ? {
-                  ...m,
-                  content: `Error: ${err instanceof Error ? err.message : "Network error"}`,
-                }
-              : m,
-          ),
-        );
-      } finally {
-        setIsLoading(false);
-      }
+        }, cumulativeDelay);
+        demoTimers.current.push(timer);
+      });
     },
-    [sessionId],
+    [],
   );
 
   const headerTitle =

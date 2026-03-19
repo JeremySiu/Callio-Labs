@@ -32,6 +32,7 @@ import {
   IconPaperclip,
 } from "@tabler/icons-react";
 import { isReportContent, downloadReportPdf } from "@/components/report-view";
+import { DEMO_PDF_MARKER, DEMO_PDF_PATH } from "@/lib/demo-sequence";
 import { supabase } from "@/lib/supabase";
 
 const PROJECTS_BUCKET = "pdfs";
@@ -154,6 +155,30 @@ function ReportDownloadRow({ markdown }: { markdown: string }) {
             <IconDownload className="size-5" />
           )}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function DemoPdfDownloadRow() {
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-center gap-3">
+        <IconFileTypePdf className="size-5 shrink-0 text-black/50" />
+        <div className="flex-1 min-w-0">
+          <p className="truncate text-sm font-medium text-black">
+            COVID-19 SARS-CoV-2 Spike Gene Primer Design Report
+          </p>
+          <p className="text-[11px] text-black/40">PDF report ready</p>
+        </div>
+        <a
+          href={DEMO_PDF_PATH}
+          download
+          className="shrink-0 rounded p-1.5 text-black transition-opacity hover:opacity-70"
+          aria-label="Download PDF"
+        >
+          <IconDownload className="size-5" />
+        </a>
       </div>
     </div>
   );
@@ -332,7 +357,9 @@ export function ChatbotPanel({
                     )}
 
                     {msg.content ? (
-                      isReportContent(msg.content) ? (
+                      msg.content.startsWith(DEMO_PDF_MARKER) ? (
+                        <DemoPdfDownloadRow />
+                      ) : isReportContent(msg.content) ? (
                         <ReportDownloadRow markdown={msg.content} />
                       ) : (
                         <div className="px-4 py-3">
