@@ -79,19 +79,7 @@ export function EmbeddedModelViewer() {
 
   return (
     <div className="relative h-full w-full">
-      <div className="absolute right-2 top-2 z-10 flex items-center gap-1.5">
-        <span className="rounded-full bg-black/10 px-2 py-0.5 text-[10px] text-black/50">
-          {RENDERED_FOLD_FILES[modelIndex].label}
-        </span>
-        <button
-          type="button"
-          onClick={switchModel}
-          className="rounded-full bg-black/10 px-2 py-0.5 text-[10px] text-black/60 hover:bg-black/20 hover:text-black/80"
-          aria-label="Switch model"
-        >
-          Next
-        </button>
-      </div>
+
       {loading && (
         <div className="absolute inset-0 z-5 flex items-center justify-center text-sm text-black/50">
           Loading model…
