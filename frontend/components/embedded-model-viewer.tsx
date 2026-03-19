@@ -31,7 +31,9 @@ export function EmbeddedModelViewer() {
       try {
         const el = containerRef.current;
         const $3Dmol = await import("3dmol");
-        const viewer = $3Dmol.createViewer(el, {});
+        const viewer = $3Dmol.createViewer(el, {
+          backgroundAlpha: 0,
+        });
         viewerRef.current = viewer;
 
         const res = await fetch(RENDERED_FOLD_FILES[index].path);
@@ -43,7 +45,6 @@ export function EmbeddedModelViewer() {
           {},
           { cartoon: { color: "spectrum" }, stick: { colorscheme: "default" } },
         );
-        viewer.setBackgroundColor("white", 0);
         viewer.zoomTo();
         viewer.zoom(1.3);
         viewer.rotate(Math.random() * 360, "x");
