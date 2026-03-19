@@ -31,9 +31,7 @@ export function EmbeddedModelViewer() {
       try {
         const el = containerRef.current;
         const $3Dmol = await import("3dmol");
-        const viewer = $3Dmol.createViewer(el, {
-          backgroundColor: "white",
-        });
+        const viewer = $3Dmol.createViewer(el, {});
         viewerRef.current = viewer;
 
         const res = await fetch(RENDERED_FOLD_FILES[index].path);
